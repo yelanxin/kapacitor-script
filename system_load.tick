@@ -1,0 +1,103 @@
+var db = 'telegraf'
+
+var rp = 'autogen'
+
+var measurement = 'system'
+
+var groupBy = ['host', 'host_group']
+
+var whereFilter = lambda: TRUE
+
+var period = 5m
+
+var every = 1m
+
+var name = 'system load告警'
+
+var idVar = name
+
+var message = ' {{.Level}}【 {{.ID}} {{ index .Fields "value" | printf "%0.2f"}} 】{{index .Tags "host"}}  {{.Time.Local.Format "Mon, Jan 2 2006 at 15:04:05 MST"}} 持续时间:{{.Duration}}'
+
+var idTag = 'alertID'
+
+var levelTag = 'level'
+
+var messageField = 'message'
+
+var durationField = 'duration'
+
+var outputDB = 'chronograf'
+
+var outputRP = 'autogen'
+
+var outputMeasurement = 'alerts'
+
+var triggerType = 'threshold'
+
+var crit = 0.8
+
+var warn = 0.7
+
+var load1 = stream
+    |from()
+        .database(db)
+        .retentionPolicy(rp)
+        .measurement(measurement)
+        .groupBy(groupBy)
+        .where(lambda: isPresent("load1"))
+    |window()
+        .period(period)
+        .every(every)
+        .align()
+    |mean('load5')
+        .as('value')
+
+var n_cpus = stream
+    |from()
+        .database(db)
+        .retentionPolicy(rp)
+        .measurement(measurement)
+        .groupBy(groupBy)
+        .where(lambda: isPresent("n_cpus"))
+    |window()
+        .period(period)
+        .every(every)
+        .align()
+    |last('n_cpus')
+        .as('value')
+
+var data = load1
+    |join(n_cpus)
+        .as('c', 'n')
+    |eval(lambda: "c.value" / float("n.value"))
+        .as('value')
+
+var trigger = data
+    |alert()
+        .crit(lambda: "value" > crit)
+        .warn(lambda: "value" > warn)
+        .stateChangesOnly()
+        .message(message)
+        .id(idVar)
+        .idTag(idTag)
+        .levelTag(levelTag)
+        .messageField(messageField)
+        .durationField(durationField)
+        .kafka()
+        .cluster('kapacitor')
+        .kafkaTopic('kapacitor-alert')
+
+trigger
+    |eval(lambda: float("value"))
+        .as('value')
+        .keep()
+    |influxDBOut()
+        .create()
+        .database(outputDB)
+        .retentionPolicy(outputRP)
+        .measurement(outputMeasurement)
+        .tag('alertName', name)
+        .tag('triggerType', triggerType)
+
+trigger
+    |httpOut('output')
